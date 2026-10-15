@@ -14,6 +14,38 @@ needs no network access at compile time.
 | Hook mode | `CONFIG_KSU_MANUAL_HOOK` (manual hooks patched into the kernel tree) |
 | License | GPL-2.0 (see `LICENSE`) |
 
+## Directory layout
+
+Upstream keeps the headers that are shared between kernel and userspace in a
+top-level `uapi/` directory and includes them through a symlink
+(`kernel/include/uapi -> ../../uapi`). The vendored copy keeps that structure
+self-contained:
+
+```
+drivers/kernelsu/
+├── include/uapi -> ../uapi     # symlink, same layout as upstream
+├── uapi/                       # app_profile.h feature.h ksu.h selinux.h sulog.h supercall.h
+├── Kbuild Kconfig Makefile LICENSE
+└── compat/ core/ feature/ hook/ infra/ manager/ policy/ runtime/ selinux/ sulog/ supercall/
+```
+
+Only the contents of upstream `kernel/` and upstream `uapi/` are vendored; the
+manager APK, userspace `ksud` and website are not part of the kernel driver.
+
+## Local patches on top of upstream (ShadowKernel)
+
+1. **`Kbuild`** - pins `KSU_VERSION_OVERRIDE ?= 33294` and
+   `KSU_VERSION_TAG_OVERRIDE ?= v3.4.0-legacy`. Without this a vendored copy
+   reports version `1` (upstream derives the version from `git rev-list --count`)
+   and the manager refuses to pair with it.
+2. **`sulog/event.c`** - upstream calls `ktime_get_boottime_ts64()` only for
+   >= 4.19 and `get_monotonic_boottime(&timespec64)` below that, which does not
+   compile on 4.14 (the pre-4.19 helper takes a `struct timespec *`). The guard
+   now starts at 4.11, where the `ts64` helper was introduced.
+3. **`feature/selinux_hide.c`** - `phys_to_page()` exists on arm64 but not on
+   every architecture; a guarded fallback (`pfn_to_page(phys >> PAGE_SHIFT)`) is
+   provided so the driver also builds on x86_64. Inert on arm64.
+
 ## Why the `legacy` branch?
 
 KernelSU-Next has two incompatible hook ABIs:

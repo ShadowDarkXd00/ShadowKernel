@@ -61,10 +61,13 @@ void ksu_compat_sulog(uint8_t sym)
     unsigned int uid = current_uid().val;
     struct timespec64 ts;
 
-#if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
+/* ShadowKernel: ktime_get_boottime_ts64() has been available since 4.11 and
+ * is the only variant that fills a struct timespec64; get_monotonic_boottime()
+ * still takes a struct timespec before 4.19. */
+#if KERNEL_VERSION(4, 11, 0) <= LINUX_VERSION_CODE
 	ktime_get_boottime_ts64(&ts);
 #else
-	get_monotonic_boottime(&ts);
+	get_monotonic_boottime((struct timespec *)&ts);
 #endif
     entry.s_time = (uint32_t)ts.tv_sec;
     entry.data = (uint32_t)uid;
@@ -96,10 +99,13 @@ int ksu_sulog_handle_compat_dump(void __user *uptr)
     if (!sbuf.index_ptr || !sbuf.buf_ptr || !sbuf.uptime_ptr)
         return 1;
 
-#if KERNEL_VERSION(4, 19, 0) <= LINUX_VERSION_CODE
+/* ShadowKernel: ktime_get_boottime_ts64() has been available since 4.11 and
+ * is the only variant that fills a struct timespec64; get_monotonic_boottime()
+ * still takes a struct timespec before 4.19. */
+#if KERNEL_VERSION(4, 11, 0) <= LINUX_VERSION_CODE
 	ktime_get_boottime_ts64(&ts);
 #else
-	get_monotonic_boottime(&ts);
+	get_monotonic_boottime((struct timespec *)&ts);
 #endif
     uptime = (uint32_t)ts.tv_sec;
     if (copy_to_user((void __user *)(uintptr_t)sbuf.uptime_ptr, &uptime, sizeof(uptime)))

@@ -21,6 +21,12 @@
 #include "selinux/selinux.h"
 #include "feature/selinux_hide.h"
 
+/* ShadowKernel: arm64 defines phys_to_page(), x86 does not - KernelSU-Next
+ * uses it unconditionally in patch_fops_slot(). */
+#ifndef phys_to_page
+#define phys_to_page(phys) pfn_to_page((phys) >> PAGE_SHIFT)
+#endif
+
 static struct page *fake_status = NULL;
 static DEFINE_MUTEX(fake_status_init_mutex);
 

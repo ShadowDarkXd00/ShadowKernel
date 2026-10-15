@@ -142,11 +142,25 @@ static int __init shadow_sysfs_init(void)
 	if (ret)
 		goto err_out;
 
-	sysfs_create_file(shadow_kobj, &release_attribute.attr);
-	sysfs_create_file(shadow_kobj, &banner_attribute.attr);
-	sysfs_create_file(shadow_kobj, &compiler_attribute.attr);
-	sysfs_create_file(shadow_kobj, &health_attribute.attr);
-	sysfs_create_file(shadow_kobj, &features_attribute.attr);
+	ret = sysfs_create_file(shadow_kobj, &release_attribute.attr);
+	if (ret)
+		goto err_out;
+
+	ret = sysfs_create_file(shadow_kobj, &banner_attribute.attr);
+	if (ret)
+		goto err_out;
+
+	ret = sysfs_create_file(shadow_kobj, &compiler_attribute.attr);
+	if (ret)
+		goto err_out;
+
+	ret = sysfs_create_file(shadow_kobj, &health_attribute.attr);
+	if (ret)
+		goto err_out;
+
+	ret = sysfs_create_file(shadow_kobj, &features_attribute.attr);
+	if (ret)
+		goto err_out;
 
 	pr_info("ShadowKernel: /sys/kernel/shadow_kernel registered\n");
 
