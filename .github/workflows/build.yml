@@ -109,30 +109,59 @@ jobs:
           mkdir -p toolchains
           case "$TOOLCHAIN" in
             neutron)
-              TAG=06092026; ASSET=neutron-clang-$TAG.tar.zst; DIR=toolchains/neutron
-              URL=https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/$TAG/$ASSET ;;
+              REPO=Neutron-Toolchains/clang-build-catalogue; TAG=06092026
+              ASSET=neutron-clang-$TAG.tar.zst; DIR=toolchains/neutron; KIND=zst ;;
             zyc-clang-16)
-              TAG=16.0.6-20260807-release; ASSET=Clang-16.0.6-20260807.tar.gz; DIR=toolchains/zyc-16
-              URL=https://github.com/ZyCromerZ/Clang/releases/download/$TAG/$ASSET ;;
+              REPO=ZyCromerZ/Clang; TAG=16.0.6-20260807-release
+              ASSET=Clang-16.0.6-20260807.tar.gz; DIR=toolchains/zyc-16; KIND=gz ;;
             *)
-              TAG=14.0.6-20261011-release; ASSET=Clang-14.0.6-20261011.tar.gz; DIR=toolchains/zyc-14
-              URL=https://github.com/ZyCromerZ/Clang/releases/download/$TAG/$ASSET ;;
+              REPO=ZyCromerZ/Clang; TAG=14.0.6-20261011-release
+              ASSET=Clang-14.0.6-20261011.tar.gz; DIR=toolchains/zyc-14; KIND=gz ;;
           esac
+          URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
 
-          CLANG_BIN=$(dirname "$(find "$DIR" -maxdepth 4 -type f -name clang -path '*/bin/*' 2>/dev/null | head -1)" 2>/dev/null || true)
-          if [ -z "$CLANG_BIN" ] || [ ! -x "$CLANG_BIN/clang" ]; then
-            echo "==> Downloading $ASSET from GitHub releases"
-            rm -rf "$DIR" && mkdir -p "$DIR"
-            case "$ASSET" in
-              *.tar.zst) curl -LSs "$URL" | tar --zstd -x -C "$DIR" ;;
-              *)         curl -LSs "$URL" | tar -xzf - -C "$DIR" ;;
-            esac
-            CLANG_BIN=$(dirname "$(find "$DIR" -maxdepth 4 -type f -name clang -path '*/bin/*' | head -1)")
+          # Layout independent: the release archives wrap clang in a directory
+          # whose name changes between builds, so locate *bin/clang* instead of
+          # assuming a fixed depth.
+          find_clang_bin() {
+            f=$(find "$1" -type f -name clang 2>/dev/null | head -1 || true)
+            [ -n "$f" ] && dirname "$f" || true
+          }
+
+          CLANG_BIN="$(find_clang_bin "$DIR" || true)"
+          if [ -n "$CLANG_BIN" ] && [ -x "$CLANG_BIN/clang" ]; then
+            echo "==> Toolchain cache hit: $CLANG_BIN"
           else
-            echo "==> Toolchain cache hit"
+            echo "==> Downloading $ASSET"
+            TARBALL="$RUNNER_TEMP/$ASSET"
+            rm -rf "$DIR" && mkdir -p "$DIR"
+            curl -fL --retry 3 --retry-delay 3 --connect-timeout 30 -o "$TARBALL" "$URL"
+            ls -lh "$TARBALL"
+            ok=0
+            case "$KIND" in
+              zst)
+                tar --zstd -xf "$TARBALL" -C "$DIR" && ok=1
+                if [ "$ok" != 1 ]; then
+                  echo "==> tar --zstd failed, retrying with an explicit zstd window"
+                  zstd -dc --long=31 "$TARBALL" | tar -xf - -C "$DIR" && ok=1
+                fi ;;
+              *)
+                tar -xzf "$TARBALL" -C "$DIR" && ok=1 ;;
+            esac
+            if [ "$ok" != 1 ]; then
+              echo "::error title=toolchain extraction failed::$ASSET ($(du -h "$TARBALL" | cut -f1) from $URL) could not be unpacked"
+              exit 1
+            fi
+            echo "==> extracted layout:"
+            find "$DIR" -maxdepth 2 | head -20
+            CLANG_BIN="$(find_clang_bin "$DIR" || true)"
+            rm -f "$TARBALL"
           fi
 
-          test -x "$CLANG_BIN/clang" || { echo "!! clang not found in $DIR"; exit 1; }
+          if [ -z "$CLANG_BIN" ] || [ ! -x "$CLANG_BIN/clang" ]; then
+            echo "::error title=clang not found::no clang binary under $DIR - contents: $(find "$DIR" -maxdepth 3 2>/dev/null | head -12 | tr '\n' ' ')"
+            exit 1
+          fi
           echo "$CLANG_BIN" >> "$GITHUB_PATH"
           echo "CLANG_BIN=$CLANG_BIN" >> "$GITHUB_ENV"
           "$CLANG_BIN/clang" --version | head -3
@@ -242,6 +271,19 @@ jobs:
             LLVM=1 \
             LLVM_IAS=1 \
             2>&1 | tee "$RUNNER_TEMP/build.log"
+
+      - name: Report build errors
+        if: failure()
+        run: |
+          # CI logs are not always easy to reach from outside, so surface the
+          # first compiler errors as a check-run annotation.
+          set +e
+          LOG="$RUNNER_TEMP/build.log"
+          [ -f "$LOG" ] || { echo "::warning title=no build log::the build log was not created"; exit 0; }
+          ERRS=$(grep -nE "error:|fatal error:|Error [0-9]+$|\*\*\* \[" "$LOG" | head -6)
+          [ -n "$ERRS" ] || ERRS=$(tail -15 "$LOG")
+          MSG=$(echo "$ERRS" | tr '\n' '|' | cut -c1-1400)
+          echo "::error title=ShadowKernel build errors::${MSG}"
 
       - name: ccache statistics
         if: always()
