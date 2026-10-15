@@ -169,6 +169,11 @@ jobs:
             echo "::error title=clang not found::no executable clang under $DIR - clang* entries: $(find "$DIR" -name 'clang*' 2>/dev/null | head -15 | tr '\n' ' ') - top level: $(find "$DIR" -maxdepth 2 2>/dev/null | head -15 | tr '\n' ' ')"
             exit 1
           fi
+          # The kernel builds with O=out, which re-enters make from inside the
+          # output directory. A *relative* PATH entry would then resolve against
+          # out/ and every tool would look missing, so store an absolute path.
+          CLANG_BIN="$(cd "$CLANG_BIN" && pwd -P)"
+          [ -x "$CLANG_BIN/clang" ] || { echo "::error title=toolchain path::not a usable toolchain: $CLANG_BIN"; exit 1; }
           echo "$CLANG_BIN" >> "$GITHUB_PATH"
           echo "CLANG_BIN=$CLANG_BIN" >> "$GITHUB_ENV"
           "$CLANG_BIN/clang" --version | head -3
@@ -277,17 +282,19 @@ jobs:
           # default $(CROSS_COMPILE)ld / objcopy / ar would abort with
           # "Error 127: not found" (first hit: linking arch/arm64/kernel/vdso).
           # This tree understands ld-name=lld and adds -fuse-ld=lld itself.
-          if ! command -v ld.lld >/dev/null 2>&1; then
-            echo "::error title=ld.lld missing::no ld.lld on PATH ($CLANG_BIN) - linkers present: $(ls "$CLANG_BIN" | grep -E '^(ld|lld)' | tr '\n' ' ')"
+          # Absolute paths on purpose: the build re-enters make from out/, so a
+          # bare tool name or a relative PATH entry would not resolve there.
+          if [ ! -x "$CLANG_BIN/ld.lld" ]; then
+            echo "::error title=ld.lld missing::no $CLANG_BIN/ld.lld - linkers present: $(ls "$CLANG_BIN" | grep -E '^(ld|lld)' | tr '\n' ' ')"
             exit 1
           fi
-          TOOLS="LD=ld.lld"
-          for pair in AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip; do
-            tool="${pair#*=}"
-            if command -v "$tool" >/dev/null 2>&1; then
-              TOOLS="$TOOLS $pair"
+          TOOLS="LD=$CLANG_BIN/ld.lld"
+          for pair in AR:llvm-ar NM:llvm-nm OBJCOPY:llvm-objcopy OBJDUMP:llvm-objdump STRIP:llvm-strip; do
+            var="${pair%%:*}"; bin="${pair##*:}"
+            if [ -x "$CLANG_BIN/$bin" ]; then
+              TOOLS="$TOOLS $var=$CLANG_BIN/$bin"
             else
-              echo "!! $tool not found - leaving the default for ${pair%%=*}"
+              echo "!! $bin is missing from $CLANG_BIN - leaving the default for $var"
             fi
           done
           echo "==> tool overrides:$TOOLS"
