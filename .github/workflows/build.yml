@@ -267,6 +267,9 @@ jobs:
       - name: Build ShadowKernel
         run: |
           set -o pipefail
+          # turn any unexpected failure into a check-run annotation as well, so
+          # the cause is visible without the Actions log archive
+          trap 'echo "::error title=build step failed::line $LINENO: ${BASH_COMMAND:0:300}"' ERR
           export PATH="$CLANG_BIN:$PATH"
           export KBUILD_BUILD_TIMESTAMP="$(git log -1 --pretty=%cd --date=format:'%Y-%m-%d %H:%M:%S')"
 
@@ -288,8 +291,9 @@ jobs:
             fi
           done
           echo "==> tool overrides:$TOOLS"
-          clang --version | head -1
-          ld.lld --version | head -1
+          # NB: no `| head -1` here, pipefail + SIGPIPE would kill the step
+          clang --version || true
+          ld.lld --version || true
 
           # shellcheck disable=SC2086
           make -j"$(nproc --all)" O=out ARCH=arm64 \
