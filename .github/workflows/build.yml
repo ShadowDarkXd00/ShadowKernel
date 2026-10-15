@@ -1,121 +1,363 @@
-name: Build Void Kernel (Neutron Clang)
+name: ShadowKernel Build
+
+# Builds ShadowKernel by Vortex (Linux 4.14 / Xiaomi Miatoll SM6250) with
+# KernelSU-Next integrated and packages a flashable AnyKernel3 zip that works
+# on MIUI/HyperOS and custom ROMs.
 
 on:
   workflow_dispatch:
+    inputs:
+      defconfig:
+        description: 'Kernel defconfig to build'
+        required: false
+        default: 'vendor/xiaomi/miatoll_defconfig'
+      toolchain:
+        description: 'Clang toolchain'
+        required: false
+        type: choice
+        default: 'neutron'
+        options:
+          - neutron
+          - zyc-clang-16
+          - zyc-clang-14
+      extra_configs:
+        description: 'Extra configs (space separated, e.g. "CONFIG_LTO_CLANG=y")'
+        required: false
+        default: ''
+      publish_release:
+        description: 'Publish the flashable zip as a GitHub release'
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Release tag (only used when publishing a release)'
+        required: false
+        default: ''
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - 'Documentation/**'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: shadowkernel-${{ github.ref }}-${{ github.event_name }}
+  cancel-in-progress: false
+
+env:
+  ARCH: arm64
+  SUBARCH: arm64
+  DEFCONFIG: ${{ github.event.inputs.defconfig || 'vendor/xiaomi/miatoll_defconfig' }}
+  TOOLCHAIN: ${{ github.event.inputs.toolchain || 'neutron' }}
+  EXTRA_CONFIGS: ${{ github.event.inputs.extra_configs || '' }}
+  KBUILD_BUILD_USER: Vortex
+  KBUILD_BUILD_HOST: ShadowKernel
+  CCACHE_COMPILERCHECK: content
+  CCACHE_MAXSIZE: 4G
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
 
 jobs:
   build:
-    name: Compile Void Kernel
-    runs-on: ubuntu-latest
+    name: Compile ShadowKernel
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
 
     steps:
-      - name: Checkout Kernel Source
+      - name: Checkout ShadowKernel source
         uses: actions/checkout@v4
 
-      - name: Setup Build Dependencies
+      - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            git ccache automake flex lzop bison gperf build-essential \
-            zip curl zlib1g-dev libncurses5-dev libssl-dev \
-            libxml2-utils xsltproc bc rsync libelf-dev
+          sudo apt-get install -y --no-install-recommends \
+            build-essential bc bison flex libssl-dev libelf-dev \
+            libncurses5-dev libncursesw5-dev python3 python-is-python3 \
+            ccache zip unzip curl wget rsync xz-utils zstd \
+            cpio kmod lz4 lzop device-tree-compiler git
 
-      # Cache Neutron Clang
-      - name: Cache Neutron Clang
+      - name: Verify KernelSU-Next integration
+        run: |
+          set -e
+          echo "==> Checking KernelSU-Next manual hook call sites"
+          for pair in "fs/open.c:ksu_handle_faccessat" \
+                      "fs/exec.c:ksu_handle_execveat" \
+                      "fs/stat.c:ksu_handle_stat" \
+                      "fs/read_write.c:ksu_handle_sys_read" \
+                      "kernel/reboot.c:ksu_handle_sys_reboot" \
+                      "drivers/input/input.c:ksu_handle_input_handle_event"; do
+            file="${pair%%:*}"; sym="${pair##*:}"
+            grep -q "$sym" "$file" || { echo "!! MISSING $sym in $file"; exit 1; }
+            echo "  ok: $sym -> $file"
+          done
+          test -f drivers/kernelsu/Kbuild || { echo "!! drivers/kernelsu is missing"; exit 1; }
+          grep -q 'obj-$(CONFIG_KSU) += kernelsu/' drivers/Makefile
+          grep -q 'drivers/kernelsu/Kconfig' drivers/Kconfig
+          echo "==> KernelSU-Next integration is intact"
+
+      - name: Cache Clang toolchain
         uses: actions/cache@v4
         with:
-          path: clang
-          key: neutron-clang-${{ runner.os }}-24
-          restore-keys: |
-            neutron-clang-${{ runner.os }}-
+          path: toolchains
+          key: shadowkernel-toolchain-${{ runner.os }}-${{ env.TOOLCHAIN }}-v1
 
-      - name: Setup Neutron Clang
+      - name: Setup Clang toolchain
         run: |
-          if [ ! -x clang/bin/clang ]; then
-            mkdir -p clang
-            cd clang
-            curl -LO "https://raw.githubusercontent.com/Neutron-Toolchains/antman/main/antman"
-            bash antman -S
-            cd ..
+          set -e
+          mkdir -p toolchains
+          case "$TOOLCHAIN" in
+            neutron)
+              TAG=06092026; ASSET=neutron-clang-$TAG.tar.zst; DIR=toolchains/neutron
+              URL=https://github.com/Neutron-Toolchains/clang-build-catalogue/releases/download/$TAG/$ASSET ;;
+            zyc-clang-16)
+              TAG=16.0.6-20260807-release; ASSET=Clang-16.0.6-20260807.tar.gz; DIR=toolchains/zyc-16
+              URL=https://github.com/ZyCromerZ/Clang/releases/download/$TAG/$ASSET ;;
+            *)
+              TAG=14.0.6-20261011-release; ASSET=Clang-14.0.6-20261011.tar.gz; DIR=toolchains/zyc-14
+              URL=https://github.com/ZyCromerZ/Clang/releases/download/$TAG/$ASSET ;;
+          esac
+
+          CLANG_BIN=$(dirname "$(find "$DIR" -maxdepth 4 -type f -name clang -path '*/bin/*' 2>/dev/null | head -1)" 2>/dev/null || true)
+          if [ -z "$CLANG_BIN" ] || [ ! -x "$CLANG_BIN/clang" ]; then
+            echo "==> Downloading $ASSET from GitHub releases"
+            rm -rf "$DIR" && mkdir -p "$DIR"
+            case "$ASSET" in
+              *.tar.zst) curl -LSs "$URL" | tar --zstd -x -C "$DIR" ;;
+              *)         curl -LSs "$URL" | tar -xzf - -C "$DIR" ;;
+            esac
+            CLANG_BIN=$(dirname "$(find "$DIR" -maxdepth 4 -type f -name clang -path '*/bin/*' | head -1)")
           else
-            echo "Neutron Clang cache hit!"
+            echo "==> Toolchain cache hit"
           fi
 
-      # Cache compiler output
-      - name: Cache ccache
+          test -x "$CLANG_BIN/clang" || { echo "!! clang not found in $DIR"; exit 1; }
+          echo "$CLANG_BIN" >> "$GITHUB_PATH"
+          echo "CLANG_BIN=$CLANG_BIN" >> "$GITHUB_ENV"
+          "$CLANG_BIN/clang" --version | head -3
+          echo "==> LLVM tools:"
+          ls "$CLANG_BIN" | grep -E '^(ld\.lld|llvm-ar|llvm-nm|llvm-objcopy|llvm-objdump|llvm-strip)$' || echo "  (none found)"
+
+      - name: Setup ccache
         uses: actions/cache@v4
         with:
-          path: ~/.cache/ccache
-          key: kernel-ccache-${{ runner.os }}-${{ hashFiles('Makefile', 'arch/arm64/Makefile', '**/Kconfig*') }}
+          path: .ccache
+          key: shadowkernel-ccache-${{ runner.os }}-${{ env.TOOLCHAIN }}-${{ hashFiles('Makefile', 'arch/arm64/configs/vendor/xiaomi/miatoll_defconfig', 'drivers/kernelsu/Kbuild') }}-${{ github.sha }}
           restore-keys: |
-            kernel-ccache-${{ runner.os }}-
+            shadowkernel-ccache-${{ runner.os }}-${{ env.TOOLCHAIN }}-${{ hashFiles('Makefile', 'arch/arm64/configs/vendor/xiaomi/miatoll_defconfig', 'drivers/kernelsu/Kbuild') }}-
+            shadowkernel-ccache-${{ runner.os }}-${{ env.TOOLCHAIN }}-
 
       - name: Configure ccache
         run: |
-          mkdir -p ~/.cache/ccache
-          ccache --set-config=cache_dir=$HOME/.cache/ccache
-          ccache --set-config=max_size=5G
+          mkdir -p "$CCACHE_DIR"
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+          ccache --set-config=max_size="$CCACHE_MAXSIZE"
           ccache --set-config=compression=true
-          ccache --zero-stats
+          ccache --zero-stats || true
           ccache --show-config
 
-      - name: Setup VoidSU Driver
+      - name: Generate .config
         run: |
-          curl -LSs "https://raw.githubusercontent.com/heySaish/VoidSU/main/kernel/setup.sh" | bash -s main
+          set -e
+          rm -rf out
+          make O=out ARCH=arm64 "$DEFCONFIG"
 
-      - name: Build Kernel Image
-        run: |
-          export PATH="$(pwd)/clang/bin:$PATH"
-          export ARCH=arm64
-          export SUBARCH=arm64
-          export CC="ccache clang"
-          export KBUILD_BUILD_USER=saish
-          export KBUILD_BUILD_HOST=void
-
-          # Defconfig load (Xiaomi Miatoll)
-          if [ -f arch/arm64/configs/vendor/xiaomi/miatoll_defconfig ]; then
-            make O=out vendor/xiaomi/miatoll_defconfig
-          elif [ -f arch/arm64/configs/stock_defconfig ]; then
-            make O=out stock_defconfig
-          elif [ -f arch/arm64/configs/vendor/atoll-perf_defconfig ]; then
-            make O=out vendor/atoll-perf_defconfig
-          else
-            make O=out defconfig
+          if [ -n "$EXTRA_CONFIGS" ]; then
+            echo "==> Applying extra configs: $EXTRA_CONFIGS"
+            for cfg in $EXTRA_CONFIGS; do
+              key="${cfg%%=*}"; val="${cfg#*=}"
+              case "$val" in
+                y) scripts/config --file out/.config -e "$key" ;;
+                n) scripts/config --file out/.config -d "$key" ;;
+                m) scripts/config --file out/.config -m "$key" ;;
+                *) scripts/config --file out/.config --set-val "$key" "$val" ;;
+              esac
+            done
           fi
 
-          make -j$(nproc --all) O=out \
-            ARCH=arm64 \
+          make O=out ARCH=arm64 olddefconfig
+
+      - name: Validate .config
+        run: |
+          set -e
+          CFG=out/.config
+
+          echo "==> Kernel identity"
+          grep -E '^CONFIG_(LOCALVERSION|LOCALVERSION_AUTO|DEFAULT_HOSTNAME)=' $CFG || true
+
+          echo "==> KernelSU-Next"
+          grep -E '^CONFIG_(KSU|KSU_MANUAL_HOOK|KSU_DEBUG|KPROBES)=' $CFG || true
+          grep -q '^CONFIG_KSU=y' $CFG || { echo "!! CONFIG_KSU is not enabled"; exit 1; }
+          grep -q '^CONFIG_KSU_MANUAL_HOOK=y' $CFG || { echo "!! CONFIG_KSU_MANUAL_HOOK is not enabled"; exit 1; }
+          grep -q '^CONFIG_EXT4_FS=y' $CFG || { echo "!! CONFIG_EXT4_FS is required by KernelSU-Next"; exit 1; }
+
+          echo "==> Kernel loader / module support"
+          grep -E '^CONFIG_(MODULES|MODULE_UNLOAD|MODULE_FORCE_LOAD|MODULE_SIG|MODVERSIONS|KALLSYMS|KALLSYMS_ALL|TRIM_UNUSED_KSYMS|TMPFS_XATTR)=' $CFG || true
+          grep -q '^CONFIG_MODULES=y' $CFG || { echo "!! CONFIG_MODULES is not enabled - kernel loaders (LKM) could not work"; exit 1; }
+          grep -q '^CONFIG_KALLSYMS=y' $CFG || { echo "!! CONFIG_KALLSYMS is not enabled"; exit 1; }
+          if grep -q '^CONFIG_MODULE_SIG_FORCE=y' $CFG; then
+            echo "!! CONFIG_MODULE_SIG_FORCE is enabled - unsigned kernel modules cannot be loaded"
+            exit 1
+          fi
+
+          echo "==> Android / custom ROM compatibility"
+          grep -E '^CONFIG_(ANDROID_BINDER_IPC|ANDROID_BINDERFS|ASHMEM|TMPFS_XATTR|EXT4_FS_SECURITY|F2FS_FS_SECURITY|SECURITY_SELINUX|DM_VERITY|OVERLAY_FS)=' $CFG || true
+          for opt in ANDROID_BINDER_IPC SECURITY_SELINUX EXT4_FS_SECURITY TMPFS_XATTR OVERLAY_FS; do
+            grep -q "^CONFIG_$opt=y" $CFG || { echo "!! CONFIG_$opt is not enabled - custom ROMs may misbehave"; exit 1; }
+          done
+
+          # The AnyKernel3 zip ships the kernel image only, so every driver the
+          # device needs must be built in. Fail loudly instead of silently
+          # producing modules that would never be installed on the device.
+          if grep -q '=m$' $CFG; then
+            echo "!! The configuration contains loadable modules (=m):"
+            grep '=m$' $CFG || true
+            exit 1
+          fi
+          echo "==> Configuration OK (fully built-in kernel)"
+
+      - name: Resolve kernel version
+        run: |
+          set -e
+          KVER=$(make -s O=out ARCH=arm64 kernelrelease | tail -1)
+          echo "KERNEL_VERSION=$KVER" >> "$GITHUB_ENV"
+          echo "==> Kernel release string: $KVER"
+          echo "- Kernel release: \`$KVER\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Defconfig: \`$DEFCONFIG\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Toolchain: \`$TOOLCHAIN\`" >> $GITHUB_STEP_SUMMARY
+          echo "- KernelSU-Next: \`v3.4.0-legacy (33294)\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Build ShadowKernel
+        run: |
+          set -o pipefail
+          export PATH="$CLANG_BIN:$PATH"
+          export KBUILD_BUILD_TIMESTAMP="$(git log -1 --pretty=%cd --date=format:'%Y-%m-%d %H:%M:%S')"
+
+          make -j"$(nproc --all)" O=out ARCH=arm64 \
             CC="ccache clang" \
             CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             LLVM=1 \
             LLVM_IAS=1 \
-            LOCALVERSION="-VoidKernel" \
-            KBUILD_BUILD_USER=saish \
-            KBUILD_BUILD_HOST=void
+            LOCALVERSION="-ShadowKernel" \
+            2>&1 | tee "$RUNNER_TEMP/build.log"
 
       - name: ccache statistics
-        run: |
-          ccache --show-stats
+        if: always()
+        run: ccache --show-stats || true
 
-      - name: Package with AnyKernel3
+      - name: Check that the build did not modify tracked sources
         run: |
-          git clone https://github.com/osm0sis/AnyKernel3 --depth=1 AK3
-
-          if [ -f out/arch/arm64/boot/Image.gz-dtb ]; then
-            cp out/arch/arm64/boot/Image.gz-dtb AK3/
-          elif [ -f out/arch/arm64/boot/Image.gz ]; then
-            cp out/arch/arm64/boot/Image.gz AK3/
+          if [ -n "$(git status --porcelain -- . ':!out' ':!.ccache' ':!toolchains')" ]; then
+            echo "!! The build modified tracked files:"
+            git status --porcelain
+            exit 1
           fi
+          echo "==> Source tree is clean"
 
-          cp anykernel.sh AK3/
+      - name: Collect kernel artifacts
+        run: |
+          set -e
+          mkdir -p artifacts
+          BOOT=out/arch/arm64/boot
 
-          cd AK3
-          zip -r9 ../Void-Kernel-Clean.zip * -x .git README.md
+          KERNEL_IMAGE=""
+          for img in Image.gz-dtb Image.gz Image.lz4 Image; do
+            if [ -f "$BOOT/$img" ]; then
+              cp "$BOOT/$img" artifacts/
+              KERNEL_IMAGE="$img"
+              break
+            fi
+          done
+          [ -n "$KERNEL_IMAGE" ] || { echo "!! No kernel image was produced"; exit 1; }
+          echo "KERNEL_IMAGE=$KERNEL_IMAGE" >> "$GITHUB_ENV"
+          echo "==> Kernel image: $KERNEL_IMAGE ($(du -h "$BOOT/$KERNEL_IMAGE" | cut -f1))"
 
-      - name: Upload Kernel Artifact
+          cp out/System.map artifacts/ 2>/dev/null || true
+          cp out/.config artifacts/ 2>/dev/null || true
+          ls -lh artifacts/
+
+      - name: Package AnyKernel3 flashable zip
+        run: |
+          set -e
+          git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
+          rm -rf AK3/.git AK3/README.md AK3/.github AK3/anykernel.sh
+          cp "$KERNEL_IMAGE" AK3/
+          cp anykernel.sh AK3/anykernel.sh
+          chmod +x AK3/anykernel.sh
+
+          ZIP="ShadowKernel-${KERNEL_VERSION}-$(date -u +%Y%m%d).zip"
+          ( cd AK3 && zip -r9 "../$ZIP" . -x '.git*' )
+          echo "ZIP_NAME=$ZIP" >> "$GITHUB_ENV"
+          ls -lh "$ZIP"
+
+      - name: Verify the flashable zip layout
+        run: |
+          set -e
+          unzip -l "$ZIP_NAME" | grep -q 'anykernel.sh' || { echo "!! anykernel.sh missing"; exit 1; }
+          unzip -l "$ZIP_NAME" | grep -q "$KERNEL_IMAGE" || { echo "!! kernel image missing"; exit 1; }
+          unzip -l "$ZIP_NAME" | grep -q 'tools/ak3-core.sh' || { echo "!! AnyKernel3 core tools missing"; exit 1; }
+          unzip -p "$ZIP_NAME" anykernel.sh | grep -q 'kernel.string=ShadowKernel' || { echo "!! branding missing"; exit 1; }
+          unzip -p "$ZIP_NAME" anykernel.sh | grep -q 'device.name1=curtana' || { echo "!! device check missing"; exit 1; }
+          echo "==> $ZIP_NAME looks good"
+
+      - name: Upload flashable AnyKernel3 zip
         uses: actions/upload-artifact@v4
         with:
-          name: Void-Kernel-Clean-Build
-          path: Void-Kernel-Clean.zip
+          name: ShadowKernel-flashable-${{ github.run_number }}
+          path: ShadowKernel-*.zip
+          if-no-files-found: error
+
+      - name: Upload raw kernel images
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShadowKernel-images-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: error
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ShadowKernel-buildlog-${{ github.run_number }}
+          path: ${{ runner.temp }}/build.log
+          if-no-files-found: ignore
+
+      - name: Publish GitHub release
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.publish_release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -e
+          TAG="${{ github.event.inputs.release_tag }}"
+          [ -n "$TAG" ] || TAG="shadow-$(date -u +%Y%m%d-%H%M)"
+
+          cat > /tmp/notes.md <<'EOF'
+          ShadowKernel by Vortex for the Xiaomi Miatoll (SM6250) family.
+
+          - Linux 4.14.357 base, tuned for custom ROMs and MIUI/HyperOS
+          - KernelSU-Next (manual hook mode) integrated, version 33294
+          - LKM friendly: unsigned modules can be loaded (KernelSU-Next LKM, susfs, KernelPatch)
+          - Flash the attached zip with TWRP/OrangeFox or a kernel flasher app
+
+          Manager APK: KernelSU-Next v3.4.0 (33294)
+          EOF
+
+          gh release create "$TAG" ShadowKernel-*.zip \
+            --title "ShadowKernel $TAG" \
+            --notes-file /tmp/notes.md \
+            --target "${{ github.sha }}"
+          echo "- Release published: \`$TAG\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Build summary
+        if: always()
+        run: |
+          {
+            echo "### ShadowKernel build result"
+            echo ""
+            echo "- Status: ${{ job.status }}"
+            ls -lh ShadowKernel-*.zip 2>/dev/null || true
+            ls -lh artifacts/ 2>/dev/null || true
+          } >> $GITHUB_STEP_SUMMARY

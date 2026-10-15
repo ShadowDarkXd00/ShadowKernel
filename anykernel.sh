@@ -1,10 +1,11 @@
 ### AnyKernel3 Ramdisk Mod Script
 ## osm0sis @ xda-developers
+## Modified for ShadowKernel by Vortex
 
 ### AnyKernel setup
 # global properties
 properties() { '
-kernel.string=Void Kernel by heySaish
+kernel.string=ShadowKernel by Vortex
 do.devicecheck=1
 do.modules=0
 do.systemless=1
@@ -21,7 +22,7 @@ supported.vendorpatchlevels=
 '; } # end properties
 
 # boot shell variables
-BLOCK=/dev/block/bootdevice/by-name/boot;
+BLOCK=/dev/block/bootdevice/by-name/boot;/dev/block/by-name/boot;/dev/block/platform/soc/1d84000.ufshc/by-name/boot;
 IS_SLOT_DEVICE=0;
 RAMDISK_COMPRESSION=auto;
 PATCH_VBMETA_FLAG=auto;
@@ -31,17 +32,31 @@ PATCH_VBMETA_FLAG=auto;
 
 # Banner
 ui_print " ";
-ui_print " __     __    _     _   _  __                    _   ";
-ui_print " \\ \\   / /__ (_) __| | | |/ /___ _ __ _ __   ___| |  ";
-ui_print "  \\ \\ / / _ \\| |/ _\` | | ' // _ \\ '__| '_ \\ / _ \\ |  ";
-ui_print "   \\ V / (_) | | (_| | | . \\  __/ |  | | | |  __/ |  ";
-ui_print "    \\_/ \\___/|_|\\__,_| |_|\\_\\___|_|  |_| |_|\\___|_|  ";
+ui_print "  ____  _               _                 _   ";
+ui_print " / ___|| |__   __ _  __| | _____      __ | |  ";
+ui_print " \\___ \\| '_ \\ / _\` |/ _\` |/ _ \\ \\ /\\ / / | |  ";
+ui_print "  ___) | | | | (_| | (_| | (_) \\ V  V /  | |  ";
+ui_print " |____/|_| |_|\\__,_|\\__,_|\\___/ \\_/\\_/   |_|  ";
 ui_print " ";
-ui_print "       --- Void Kernel by heySaish ---";
+ui_print "  ==========================================  ";
+ui_print "     ShadowKernel by Vortex  |  Linux 4.14    ";
+ui_print "  ==========================================  ";
+ui_print " ";
+ui_print "  Device : Xiaomi Miatoll (SM6250) family     ";
+ui_print "  Root   : KernelSU-Next (manual hook mode)   ";
+ui_print " ";
+ui_print "  Installing kernel image ...                 ";
 ui_print " ";
 
 # boot install
 dump_boot;
 
+# write the new kernel image into the boot ramdisk
 write_boot;
+
+ui_print " ";
+ui_print "  ShadowKernel installed successfully.        ";
+ui_print "  Reboot and install the KernelSU-Next        ";
+ui_print "  manager APK (v3.4.0 / 33294) to use root.   ";
+ui_print " ";
 ## end boot install
