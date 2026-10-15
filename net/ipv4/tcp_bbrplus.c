@@ -183,6 +183,6 @@ static void __exit bbrplus_unregister(void)
 module_init(bbrplus_register);
 module_exit(bbrplus_unregister);
 
-MODULE_AUTHOR("Saish <saishnotfound@gmail.com>");
+MODULE_AUTHOR("Vortex <ShadowKernel>");
 MODULE_LICENSE("GPL");
 MODULE_DESCRIPTION("BBRplus TCP Congestion Control (Community Maintained)");

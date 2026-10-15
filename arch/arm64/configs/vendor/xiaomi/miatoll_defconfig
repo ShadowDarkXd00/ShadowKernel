@@ -1,8 +1,8 @@
 # CONFIG_ZONE_DMA is not set
 CONFIG_TOOLS_SUPPORT_RELR=y
-CONFIG_LOCALVERSION="-VoidKernel"
+CONFIG_LOCALVERSION="-ShadowKernel"
 # CONFIG_LOCALVERSION_AUTO is not set
-CONFIG_DEFAULT_HOSTNAME="Void-Kernel"
+CONFIG_DEFAULT_HOSTNAME="ShadowKernel"
 CONFIG_IRQ_SBALANCE=y
 CONFIG_IRQ_SBALANCE_POLL_MSEC=20000
 CONFIG_SBALANCE_EXCLUDE_CPUS="5,7"
@@ -727,4 +727,37 @@ CONFIG_HAVE_KPROBES=y
 CONFIG_KPROBE_EVENTS=y
 CONFIG_KSU=y
 CONFIG_KSU_MANUAL_HOOK=y
-CONFIG_KSU_SUSFS=n
+
+#
+# ShadowKernel: kernel loader / LKM support
+#
+# Modules must be loadable without signature enforcement so that external
+# kernel modules (KernelSU-Next LKM, susfs LKM, KernelPatch/APatch and other
+# kernel loaders) can be inserted on a custom ROM.
+#
+CONFIG_MODULES=y
+CONFIG_MODULE_UNLOAD=y
+CONFIG_MODULE_FORCE_LOAD=y
+# CONFIG_MODULE_SIG is not set
+# CONFIG_MODVERSIONS is not set
+# CONFIG_TRIM_UNUSED_KSYMS is not set
+CONFIG_KALLSYMS=y
+CONFIG_KALLSYMS_ALL=y
+CONFIG_DEBUG_KERNEL=y
+
+#
+# Keep the previously built-in drivers built-in now that modules are enabled
+# (these symbols default to 'm' when CONFIG_MODULES=y)
+#
+CONFIG_HW_RANDOM=y
+CONFIG_BACKLIGHT_CLASS_DEVICE=y
+# CONFIG_IR_MSM_GENI is not set
+# CONFIG_SCSI_UFS_TEST is not set
+CONFIG_RMNET_PERF=y
+CONFIG_RMNET_SHS=y
+
+#
+# Custom ROM / Android compatibility
+#
+CONFIG_TMPFS_XATTR=y
+CONFIG_CRYPTO_ECHAINIV=y

@@ -2,7 +2,7 @@
 VERSION = 4
 PATCHLEVEL = 14
 SUBLEVEL = 357
-EXTRAVERSION = -VoidKernel
+EXTRAVERSION =
 NAME = Petit Gorille
 
 # *DOCUMENTATION*
@@ -753,6 +753,10 @@ ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
 KBUILD_CFLAGS   += -Os
 else
 KBUILD_CFLAGS   += -O3
+# ShadowKernel: these are ARM64-only CPU tuning flags (Qualcomm Atoll /
+# SM6250 = Kryo 465, Cortex-A76 + Cortex-A55), so keep them out of any
+# non-arm64 build.
+ifeq ($(SRCARCH),arm64)
 ifeq ($(cc-name),gcc)
 KBUILD_CFLAGS	+= -march=armv8.2-a+crypto+fp16+dotprod+rcpc
 KBUILD_CFLAGS	+= -mtune=cortex-a76.cortex-a55
@@ -763,6 +767,7 @@ KBUILD_CFLAGS	+= -mtune=cortex-a76
 # Enable hot cold split optimization
 KBUILD_CFLAGS   += -mllvm -hot-cold-split=true
 # Enable MLGO optimizations for register allocation
+endif
 endif
 endif
 
