@@ -241,7 +241,6 @@ jobs:
             CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
             LLVM=1 \
             LLVM_IAS=1 \
-            LOCALVERSION="-ShadowKernel" \
             2>&1 | tee "$RUNNER_TEMP/build.log"
 
       - name: ccache statistics
@@ -273,6 +272,10 @@ jobs:
           done
           [ -n "$KERNEL_IMAGE" ] || { echo "!! No kernel image was produced"; exit 1; }
           echo "KERNEL_IMAGE=$KERNEL_IMAGE" >> "$GITHUB_ENV"
+          # KERNEL_IMAGE is a bare basename, so remember the full path as well:
+          # the packaging step copies the image into the AnyKernel3 root and it
+          # must not depend on the image already living in the tree root.
+          echo "KERNEL_IMAGE_PATH=$BOOT/$KERNEL_IMAGE" >> "$GITHUB_ENV"
           echo "==> Kernel image: $KERNEL_IMAGE ($(du -h "$BOOT/$KERNEL_IMAGE" | cut -f1))"
 
           cp out/System.map artifacts/ 2>/dev/null || true
@@ -284,7 +287,7 @@ jobs:
           set -e
           git clone --depth=1 https://github.com/osm0sis/AnyKernel3.git AK3
           rm -rf AK3/.git AK3/README.md AK3/.github AK3/anykernel.sh
-          cp "$KERNEL_IMAGE" AK3/
+          cp "$KERNEL_IMAGE_PATH" AK3/
           cp anykernel.sh AK3/anykernel.sh
           chmod +x AK3/anykernel.sh
 
@@ -296,11 +299,43 @@ jobs:
       - name: Verify the flashable zip layout
         run: |
           set -e
-          unzip -l "$ZIP_NAME" | grep -q 'anykernel.sh' || { echo "!! anykernel.sh missing"; exit 1; }
-          unzip -l "$ZIP_NAME" | grep -q "$KERNEL_IMAGE" || { echo "!! kernel image missing"; exit 1; }
-          unzip -l "$ZIP_NAME" | grep -q 'tools/ak3-core.sh' || { echo "!! AnyKernel3 core tools missing"; exit 1; }
-          unzip -p "$ZIP_NAME" anykernel.sh | grep -q 'kernel.string=ShadowKernel' || { echo "!! branding missing"; exit 1; }
-          unzip -p "$ZIP_NAME" anykernel.sh | grep -q 'device.name1=curtana' || { echo "!! device check missing"; exit 1; }
+          # unzip -Z1 prints entry names only, so grep -x gives an exact match
+          # instead of a substring hit somewhere inside a path.
+          LIST=$(unzip -Z1 "$ZIP_NAME")
+          echo "$LIST" | grep -qxE '(\./)?anykernel.sh' || { echo "!! anykernel.sh missing"; exit 1; }
+          echo "$LIST" | grep -qxE "(\./)?$KERNEL_IMAGE" || { echo "!! kernel image ($KERNEL_IMAGE) missing"; exit 1; }
+          echo "$LIST" | grep -qxE '(\./)?tools/ak3-core.sh' || { echo "!! AnyKernel3 core tools missing"; exit 1; }
+
+          unzip -p "$ZIP_NAME" anykernel.sh > "$RUNNER_TEMP/ak-anykernel.sh"
+          grep -q 'kernel.string=ShadowKernel' "$RUNNER_TEMP/ak-anykernel.sh" || { echo "!! branding missing"; exit 1; }
+          grep -q 'device.name1=curtana' "$RUNNER_TEMP/ak-anykernel.sh" || { echo "!! device check missing"; exit 1; }
+
+          # AnyKernel3 resolves the target partition itself, so BLOCK must be a
+          # single partition *name* ("boot"), one /dev/... path or "auto". A
+          # ';'-separated device list is parsed as one single name by
+          # setup_ak() and ends in `abort "Unable to determine <value>
+          # partition"`; a hardcoded path breaks on recoveries with a different
+          # by-name layout. Both are rejected here on purpose.
+          BLOCK_LINE=$(grep -m1 '^BLOCK=' "$RUNNER_TEMP/ak-anykernel.sh" || true)
+          [ -n "$BLOCK_LINE" ] || { echo "!! BLOCK is not set in anykernel.sh"; exit 1; }
+          # strip the trailing ';' AK3 config lines end with
+          BLOCK_VALUE=$(printf '%s' "$BLOCK_LINE" | sed -e 's/^BLOCK=//' -e 's/;$//')
+
+          case "$BLOCK_VALUE" in
+            *';'*) echo "!! BLOCK must be a single partition, not a ';'-separated"
+                   echo "!! device list (setup_ak would abort): $BLOCK_LINE"
+                   exit 1 ;;
+            /dev/*) echo "!! BLOCK uses a hardcoded device path, which breaks on"
+                    echo "!! other recoveries/ROMs - use a partition name: $BLOCK_LINE"
+                    exit 1 ;;
+            boot|auto|kernel|recovery|init_boot)
+              echo "==> BLOCK ok: $BLOCK_LINE" ;;
+            *) echo "!! unexpected BLOCK value: '$BLOCK_VALUE'"; exit 1 ;;
+          esac
+
+          grep -qE '^IS_SLOT_DEVICE=(auto|0|1);[[:space:]]*$' "$RUNNER_TEMP/ak-anykernel.sh" \
+            || { echo "!! IS_SLOT_DEVICE is missing or malformed"; exit 1; }
+
           echo "==> $ZIP_NAME looks good"
 
       - name: Upload flashable AnyKernel3 zip

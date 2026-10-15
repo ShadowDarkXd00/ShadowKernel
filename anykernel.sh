@@ -22,8 +22,14 @@ supported.vendorpatchlevels=
 '; } # end properties
 
 # boot shell variables
-BLOCK=/dev/block/bootdevice/by-name/boot;/dev/block/by-name/boot;/dev/block/platform/soc/1d84000.ufshc/by-name/boot;
-IS_SLOT_DEVICE=0;
+# NOTE: BLOCK must be a single partition name (resolved by ak3-core.sh across
+# every by-name path variant), a single /dev/... path, or "auto". A `;`-separated
+# device list is NOT supported by AnyKernel3 and aborts with
+# "Unable to determine <value> partition". Custom dd args go after one space.
+BLOCK=boot;
+# "auto" does not abort when the device has no A/B slots (miatoll is A-only);
+# only "1" hard-aborts with "Unable to determine active slot".
+IS_SLOT_DEVICE=auto;
 RAMDISK_COMPRESSION=auto;
 PATCH_VBMETA_FLAG=auto;
 

@@ -223,8 +223,9 @@ anykernel.sh                                         AnyKernel3 installer defini
 
 - **Vortex** — ShadowKernel maintainer, rebrand, KSU-Next integration, LKM/loader
   bring-up and CI.
-- **heySaish** — original kernel base (formerly *Void Kernel*) whose tuning and
-  hook work this project builds upon.
+- **The original Miatoll kernel base** — the tree, tuning and KernelSU hook work
+  ShadowKernel was rebranded and built on top of (see the Git history of this
+  repository).
 - **KernelSU-Next** team — in-tree root engine (`legacy` branch, `v3.4.0-legacy`).
 - **osm0sis** — AnyKernel3 installer.
 - **Neutron Toolchains**, **ZyCromerZ** — Clang/LLVM toolchains used by CI.
