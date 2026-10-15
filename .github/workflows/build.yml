@@ -270,13 +270,33 @@ jobs:
           export PATH="$CLANG_BIN:$PATH"
           export KBUILD_BUILD_TIMESTAMP="$(git log -1 --pretty=%cd --date=format:'%Y-%m-%d %H:%M:%S')"
 
+          # The toolchains ship LLVM binutils, not GNU cross binutils, so the
+          # default $(CROSS_COMPILE)ld / objcopy / ar would abort with
+          # "Error 127: not found" (first hit: linking arch/arm64/kernel/vdso).
+          # This tree understands ld-name=lld and adds -fuse-ld=lld itself.
+          if ! command -v ld.lld >/dev/null 2>&1; then
+            echo "::error title=ld.lld missing::no ld.lld on PATH ($CLANG_BIN) - linkers present: $(ls "$CLANG_BIN" | grep -E '^(ld|lld)' | tr '\n' ' ')"
+            exit 1
+          fi
+          TOOLS="LD=ld.lld"
+          for pair in AR=llvm-ar NM=llvm-nm OBJCOPY=llvm-objcopy OBJDUMP=llvm-objdump STRIP=llvm-strip; do
+            tool="${pair#*=}"
+            if command -v "$tool" >/dev/null 2>&1; then
+              TOOLS="$TOOLS $pair"
+            else
+              echo "!! $tool not found - leaving the default for ${pair%%=*}"
+            fi
+          done
+          echo "==> tool overrides:$TOOLS"
+          clang --version | head -1
+          ld.lld --version | head -1
+
+          # shellcheck disable=SC2086
           make -j"$(nproc --all)" O=out ARCH=arm64 \
             CC="ccache clang" \
-            CLANG_TRIPLE=aarch64-linux-gnu- \
             CROSS_COMPILE=aarch64-linux-gnu- \
-            CROSS_COMPILE_ARM32=arm-linux-gnueabi- \
-            LLVM=1 \
             LLVM_IAS=1 \
+            $TOOLS \
             2>&1 | tee "$RUNNER_TEMP/build.log"
 
       - name: Report build errors
@@ -287,7 +307,7 @@ jobs:
           set +e
           LOG="$RUNNER_TEMP/build.log"
           [ -f "$LOG" ] || { echo "::warning title=no build log::the build log was not created"; exit 0; }
-          ERRS=$(grep -nE "error:|fatal error:|Error [0-9]+$|\*\*\* \[" "$LOG" | head -6)
+          ERRS=$(grep -nE "error:|fatal error:|Error [0-9]+$|\*\*\* \[|not found|No such file or directory" "$LOG" | head -6)
           [ -n "$ERRS" ] || ERRS=$(tail -15 "$LOG")
           MSG=$(echo "$ERRS" | tr '\n' '|' | cut -c1-1400)
           echo "::error title=ShadowKernel build errors::${MSG}"
