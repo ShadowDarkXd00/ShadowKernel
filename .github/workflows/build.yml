@@ -120,16 +120,23 @@ jobs:
           esac
           URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
 
-          # Layout independent: the release archives wrap clang in a directory
-          # whose name changes between builds, so locate *bin/clang* instead of
-          # assuming a fixed depth.
+          # Layout independent: the release archives either wrap the toolchain in
+          # a directory whose name changes between builds (zyc) or drop bin/ at
+          # the top level (neutron). Also, clang is often a symlink, so look for
+          # a directory that contains an executable clang instead of scanning
+          # for regular files.
           find_clang_bin() {
-            f=$(find "$1" -type f -name clang 2>/dev/null | head -1 || true)
-            [ -n "$f" ] && dirname "$f" || true
+            for d in "$1" $(find "$1" -type d 2>/dev/null); do
+              # -x alone also matches a directory, hence the -d guard
+              if [ -x "$d/clang" ] && [ ! -d "$d/clang" ]; then
+                printf '%s\n' "$d"; return 0
+              fi
+            done
+            return 0
           }
 
           CLANG_BIN="$(find_clang_bin "$DIR" || true)"
-          if [ -n "$CLANG_BIN" ] && [ -x "$CLANG_BIN/clang" ]; then
+          if [ -n "$CLANG_BIN" ] && [ -x "$CLANG_BIN/clang" ] && [ ! -d "$CLANG_BIN/clang" ]; then
             echo "==> Toolchain cache hit: $CLANG_BIN"
           else
             echo "==> Downloading $ASSET"
@@ -158,8 +165,8 @@ jobs:
             rm -f "$TARBALL"
           fi
 
-          if [ -z "$CLANG_BIN" ] || [ ! -x "$CLANG_BIN/clang" ]; then
-            echo "::error title=clang not found::no clang binary under $DIR - contents: $(find "$DIR" -maxdepth 3 2>/dev/null | head -12 | tr '\n' ' ')"
+          if [ -z "$CLANG_BIN" ] || [ ! -x "$CLANG_BIN/clang" ] || [ -d "$CLANG_BIN/clang" ]; then
+            echo "::error title=clang not found::no executable clang under $DIR - clang* entries: $(find "$DIR" -name 'clang*' 2>/dev/null | head -15 | tr '\n' ' ') - top level: $(find "$DIR" -maxdepth 2 2>/dev/null | head -15 | tr '\n' ' ')"
             exit 1
           fi
           echo "$CLANG_BIN" >> "$GITHUB_PATH"
