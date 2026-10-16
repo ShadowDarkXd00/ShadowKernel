@@ -63,7 +63,10 @@ env:
 jobs:
   build:
     name: Compile ShadowKernel
-    runs-on: ubuntu-22.04
+    # Neutron Clang is built against glibc 2.38, so the runner must provide
+    # at least that (ubuntu-24.04 ships glibc 2.39; ubuntu-22.04 has 2.35
+    # and clang dies with "version GLIBC_2.38 not found").
+    runs-on: ubuntu-24.04
     timeout-minutes: 180
 
     steps:
@@ -182,7 +185,22 @@ jobs:
           fi
           echo "$CLANG_BIN" >> "$GITHUB_PATH"
           echo "CLANG_BIN=$CLANG_BIN" >> "$GITHUB_ENV"
-          "$CLANG_BIN/clang" --version | head -3
+
+          # Verify that clang actually *runs* on this runner (not merely that
+          # the binary exists): "clang --version | head" would swallow a glibc
+          # mismatch because only head's exit status is checked. A toolchain
+          # built against a newer glibc must fail here, with a clear message,
+          # instead of dying later in the middle of the kernel build.
+          if ! "$CLANG_BIN/clang" --version > "$RUNNER_TEMP/clang-version.txt" 2>&1; then
+            echo "::error title=clang does not run on this runner::$(head -3 "$RUNNER_TEMP/clang-version.txt" | tr '\n' ' ')"
+            exit 1
+          fi
+          head -3 "$RUNNER_TEMP/clang-version.txt"
+          if ! "$CLANG_BIN/ld.lld" --version > "$RUNNER_TEMP/lld-version.txt" 2>&1; then
+            echo "::error title=ld.lld does not run on this runner::$(head -3 "$RUNNER_TEMP/lld-version.txt" | tr '\n' ' ')"
+            exit 1
+          fi
+          head -1 "$RUNNER_TEMP/lld-version.txt"
           echo "==> LLVM tools:"
           ls "$CLANG_BIN" | grep -E '^(ld\.lld|llvm-ar|llvm-nm|llvm-objcopy|llvm-objdump|llvm-strip)$' || echo "  (none found)"
 
