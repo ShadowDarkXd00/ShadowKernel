@@ -166,6 +166,16 @@ jobs:
             rm -f "$TARBALL"
           fi
 
+          # Kbuild re-execs make with -C $(KBUILD_OUTPUT) for O= builds, so a
+          # relative PATH entry stops resolving the moment make leaves the
+          # workspace root and every tool would fail with "ld.lld: not found"
+          # (the first casualty is scripts/Kbuild.include's __ld-name probe,
+          # which shells out to $(LD) -v during makefile parsing). Make the
+          # toolchain path absolute before it goes anywhere near $GITHUB_PATH.
+          if [ -n "$CLANG_BIN" ]; then
+            CLANG_BIN="$(cd "$CLANG_BIN" && pwd)"
+          fi
+
           if [ -z "$CLANG_BIN" ] || [ ! -x "$CLANG_BIN/clang" ] || [ -d "$CLANG_BIN/clang" ]; then
             echo "::error title=clang not found::no executable clang under $DIR - clang* entries: $(find "$DIR" -name 'clang*' 2>/dev/null | head -15 | tr '\n' ' ') - top level: $(find "$DIR" -maxdepth 2 2>/dev/null | head -15 | tr '\n' ' ')"
             exit 1
